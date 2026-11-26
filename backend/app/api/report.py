@@ -18,6 +18,7 @@ from ..models.project import ProjectManager, ProjectStatus
 from ..models.task import TaskManager, TaskStatus
 from ..utils.logger import get_logger
 from ..utils.locale import t, get_locale, set_locale
+from ..utils.llm_client import LLMClient
 from ..utils.zep_lifecycle import (
     graph_lifecycle_lock,
     register_graph_reader,
@@ -152,9 +153,11 @@ def generate_report():
                 "error": t('api.missingSimRequirement')
             }), 400
         
-        # 提前生成 report_id，以便立即返回给前端
+        # 提前生成或复用 report_id，以便立即返回给前端
         import uuid
-        report_id = f"report_{uuid.uuid4().hex[:12]}"
+        report_id = data.get('report_id')
+        if not report_id:
+            report_id = f"report_{uuid.uuid4().hex[:12]}"
         
         # Register the background report as a graph reader under the same lock
         # used by graph deletion and updater startup. A lock itself cannot be
@@ -255,7 +258,8 @@ def generate_report():
                     agent = ReportAgent(
                         graph_id=graph_id,
                         simulation_id=simulation_id,
-                        simulation_requirement=simulation_requirement
+                        simulation_requirement=simulation_requirement,
+                        llm_client=LLMClient.create_boost()
                     )
 
                     def progress_callback(stage, progress, message):
@@ -286,7 +290,7 @@ def generate_report():
                             report.error or t('api.reportGenerateFailed')
                         )
                 except Exception as e:
-                    logger.error(f"报告生成失败: {str(e)}")
+                    logger.error(f"Report generation failed: {str(e)}")
                     task_manager.fail_task(task_id, str(e))
                 finally:
                     unregister_graph_reader(graph_id, report_id)
@@ -311,7 +315,7 @@ def generate_report():
         })
         
     except Exception as e:
-        logger.error(f"启动报告生成任务失败: {str(e)}")
+        logger.error(f"Failed to start report generation task: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -384,7 +388,7 @@ def get_generate_status():
         })
         
     except Exception as e:
-        logger.error(f"查询任务状态失败: {str(e)}")
+        logger.error(f"Failed to query task status: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e)
@@ -427,7 +431,7 @@ def get_report(report_id: str):
         })
         
     except Exception as e:
-        logger.error(f"获取报告失败: {str(e)}")
+        logger.error(f"Failed to get report: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -466,7 +470,7 @@ def get_report_by_simulation(simulation_id: str):
         })
         
     except Exception as e:
-        logger.error(f"获取报告失败: {str(e)}")
+        logger.error(f"Failed to get report: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -506,7 +510,7 @@ def list_reports():
         })
         
     except Exception as e:
-        logger.error(f"列出报告失败: {str(e)}")
+        logger.error(f"Failed to list reports: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -552,7 +556,7 @@ def download_report(report_id: str):
         )
         
     except Exception as e:
-        logger.error(f"下载报告失败: {str(e)}")
+        logger.error(f"Failed to download report: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -578,7 +582,7 @@ def delete_report(report_id: str):
         })
         
     except Exception as e:
-        logger.error(f"删除报告失败: {str(e)}")
+        logger.error(f"Failed to delete report: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -660,11 +664,14 @@ def chat_with_report_agent():
         
         simulation_requirement = project.simulation_requirement or ""
         
-        # 创建Agent并进行对话
+        # 创建Agent并进行对话（尝试使用加速LLM配置）
+        boost_llm = LLMClient.create_boost()
+        
         agent = ReportAgent(
             graph_id=graph_id,
             simulation_id=simulation_id,
-            simulation_requirement=simulation_requirement
+            simulation_requirement=simulation_requirement,
+            llm_client=boost_llm
         )
         
         result = agent.chat(message=message, chat_history=chat_history)
@@ -675,7 +682,7 @@ def chat_with_report_agent():
         })
         
     except Exception as e:
-        logger.error(f"对话失败: {str(e)}")
+        logger.error(f"Chat failed: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -718,7 +725,7 @@ def get_report_progress(report_id: str):
         })
         
     except Exception as e:
-        logger.error(f"获取报告进度失败: {str(e)}")
+        logger.error(f"Failed to get report progress: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -769,7 +776,7 @@ def get_report_sections(report_id: str):
         })
         
     except Exception as e:
-        logger.error(f"获取章节列表失败: {str(e)}")
+        logger.error(f"Failed to get section list: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -813,7 +820,7 @@ def get_single_section(report_id: str, section_index: int):
         })
         
     except Exception as e:
-        logger.error(f"获取章节内容失败: {str(e)}")
+        logger.error(f"Failed to get section content: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -864,7 +871,7 @@ def check_report_status(simulation_id: str):
         })
         
     except Exception as e:
-        logger.error(f"检查报告状态失败: {str(e)}")
+        logger.error(f"Failed to check report status: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -925,7 +932,7 @@ def get_agent_log(report_id: str):
         })
         
     except Exception as e:
-        logger.error(f"获取Agent日志失败: {str(e)}")
+        logger.error(f"Failed to get agent log: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -959,7 +966,7 @@ def stream_agent_log(report_id: str):
         })
         
     except Exception as e:
-        logger.error(f"获取Agent日志失败: {str(e)}")
+        logger.error(f"Failed to get agent log: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -1007,7 +1014,7 @@ def get_console_log(report_id: str):
         })
         
     except Exception as e:
-        logger.error(f"获取控制台日志失败: {str(e)}")
+        logger.error(f"Failed to get console log: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -1041,7 +1048,7 @@ def stream_console_log(report_id: str):
         })
         
     except Exception as e:
-        logger.error(f"获取控制台日志失败: {str(e)}")
+        logger.error(f"Failed to get console log: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -1091,7 +1098,7 @@ def search_graph_tool():
         })
         
     except Exception as e:
-        logger.error(f"图谱搜索失败: {str(e)}")
+        logger.error(f"Graph search failed: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),
@@ -1131,7 +1138,7 @@ def get_graph_statistics_tool():
         })
         
     except Exception as e:
-        logger.error(f"获取图谱统计失败: {str(e)}")
+        logger.error(f"Failed to get graph statistics: {str(e)}")
         return jsonify({
             "success": False,
             "error": str(e),

@@ -12,7 +12,8 @@ export function generateOntology(formData) {
     data: formData,
     headers: {
       'Content-Type': 'multipart/form-data'
-    }
+    },
+    timeout: 900000 // 15分钟超时
   })
 }
 

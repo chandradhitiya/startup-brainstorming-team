@@ -1,6 +1,7 @@
 """\n配置管理\n统一从项目根目录的 .env 文件加载配置\n"""
 
 import os
+from typing import Optional
 from dotenv import load_dotenv
 
 # 加载项目根目录的 .env 文件
@@ -25,8 +26,17 @@ class Config:
     JSON_AS_ASCII = False
     
     # LLM配置（统一使用OpenAI格式）
+    @staticmethod
+    def normalize_base_url(url: Optional[str]) -> str:
+        if not url:
+            return 'https://api.openai.com/v1'
+        cleaned = url.strip().rstrip('/')
+        if cleaned.endswith('/chat/completions'):
+            cleaned = cleaned[:-len('/chat/completions')].rstrip('/')
+        return cleaned
+
     LLM_API_KEY = os.environ.get('LLM_API_KEY')
-    LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
+    LLM_BASE_URL = normalize_base_url.__func__(os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1'))
     LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
     
     # Zep配置
@@ -60,6 +70,18 @@ class Config:
     REPORT_AGENT_MAX_REFLECTION_ROUNDS = int(os.environ.get('REPORT_AGENT_MAX_REFLECTION_ROUNDS', '2'))
     REPORT_AGENT_TEMPERATURE = float(os.environ.get('REPORT_AGENT_TEMPERATURE', '0.5'))
     
+    @classmethod
+    def reload(cls):
+        """重新从 .env 加载最新配置"""
+        if os.path.exists(project_root_env):
+            load_dotenv(project_root_env, override=True)
+        else:
+            load_dotenv(override=True)
+        cls.LLM_API_KEY = os.environ.get('LLM_API_KEY')
+        cls.LLM_BASE_URL = cls.normalize_base_url(os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1'))
+        cls.LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
+        cls.ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
+
     @classmethod
     def validate(cls) -> list[str]:
         """验证必要配置"""

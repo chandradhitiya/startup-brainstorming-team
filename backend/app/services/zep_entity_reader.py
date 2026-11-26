@@ -120,7 +120,7 @@ class ZepEntityReader:
         Returns:
             节点列表
         """
-        logger.info(f"获取图谱 {graph_id} 的所有节点...")
+        logger.info(f"Fetching all nodes for graph {graph_id}...")
 
         nodes = fetch_all_nodes(self.client, graph_id)
 
@@ -134,7 +134,7 @@ class ZepEntityReader:
                 "attributes": node.attributes or {},
             })
 
-        logger.info(f"共获取 {len(nodes_data)} 个节点")
+        logger.info(f"Fetched total {len(nodes_data)} nodes")
         return nodes_data
 
     def get_all_edges(self, graph_id: str) -> List[Dict[str, Any]]:
@@ -147,7 +147,7 @@ class ZepEntityReader:
         Returns:
             边列表
         """
-        logger.info(f"获取图谱 {graph_id} 的所有边...")
+        logger.info(f"Fetching all edges for graph {graph_id}...")
 
         edges = fetch_all_edges(self.client, graph_id)
 
@@ -162,7 +162,7 @@ class ZepEntityReader:
                 "attributes": edge.attributes or {},
             })
 
-        logger.info(f"共获取 {len(edges_data)} 条边")
+        logger.info(f"Fetched total {len(edges_data)} edges")
         return edges_data
     
     def get_node_edges(
@@ -215,7 +215,7 @@ class ZepEntityReader:
         except Exception as e:
             # An empty edge list is valid data. Authentication, permission and
             # transport failures must not be made indistinguishable from it.
-            logger.error(f"获取节点 {node_uuid} 的边失败: {str(e)}")
+            logger.error(f"Failed to get edges for node {node_uuid}: {str(e)}")
             raise
     
     def filter_defined_entities(
@@ -239,7 +239,7 @@ class ZepEntityReader:
         Returns:
             FilteredEntities: 过滤后的实体集合
         """
-        logger.info(f"开始筛选图谱 {graph_id} 的实体...")
+        logger.info(f"Starting entity filtering for graph {graph_id}...")
         
         # 获取所有节点
         all_nodes = self.get_all_nodes(graph_id)
@@ -326,7 +326,7 @@ class ZepEntityReader:
             
             filtered_entities.append(entity)
         
-        logger.info(f"筛选完成: 总节点 {total_count}, 符合条件 {len(filtered_entities)}, "
+        logger.info(f"Filtering complete: total nodes {total_count}, matched {len(filtered_entities)}, "
                    f"实体类型: {entity_types_found}")
         
         return FilteredEntities(
@@ -418,7 +418,7 @@ class ZepEntityReader:
             # Only an actual Zep 404 means "entity not found". Propagate 401,
             # 403 and exhausted transport errors so callers cannot prepare a
             # simulation with silently incomplete graph context.
-            logger.error(f"获取实体 {entity_uuid} 失败: {str(e)}")
+            logger.error(f"Failed to get entity {entity_uuid}: {str(e)}")
             raise
     
     def get_entities_by_type(

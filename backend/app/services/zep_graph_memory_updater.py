@@ -286,7 +286,7 @@ class ZepGraphMemoryUpdater:
         self._failed_batches: List[Dict[str, Any]] = []
         self._pending_episode_uuids: List[str] = []
         
-        logger.info(f"ZepGraphMemoryUpdater 初始化完成: graph_id={graph_id}, batch_size={self.BATCH_SIZE}")
+        logger.info(f"ZepGraphMemoryUpdater initialized: graph_id={graph_id}, batch_size={self.BATCH_SIZE}")
     
     def _get_platform_display_name(self, platform: str) -> str:
         """获取平台的显示名称"""
@@ -308,7 +308,7 @@ class ZepGraphMemoryUpdater:
             name=f"ZepMemoryUpdater-{self.graph_id[:8]}"
         )
         self._worker_thread.start()
-        logger.info(f"ZepGraphMemoryUpdater 已启动: graph_id={self.graph_id}")
+        logger.info(f"ZepGraphMemoryUpdater started: graph_id={self.graph_id}")
     
     def stop(self):
         """Drain the worker, flush tail events, and wait for Cloud ingestion."""
@@ -340,7 +340,7 @@ class ZepGraphMemoryUpdater:
 
         self._wait_for_pending_episodes(deadline=deadline)
         
-        logger.info(f"ZepGraphMemoryUpdater 已停止: graph_id={self.graph_id}, "
+        logger.info(f"ZepGraphMemoryUpdater stopped: graph_id={self.graph_id}, "
                    f"total_activities={self._total_activities}, "
                    f"batches_sent={self._total_sent}, "
                    f"items_sent={self._total_items_sent}, "
@@ -378,7 +378,7 @@ class ZepGraphMemoryUpdater:
                 raise RuntimeError("Zep graph updater is not running")
             self._activity_queue.put(activity)
             self._total_activities += 1
-        logger.debug(f"添加活动到Zep队列: {activity.agent_name} - {activity.action_type}")
+        logger.debug(f"Added activity to Zep queue: {activity.agent_name} - {activity.action_type}")
     
     def add_activity_from_dict(self, data: Dict[str, Any], platform: str):
         """
@@ -438,7 +438,7 @@ class ZepGraphMemoryUpdater:
                     pass
                     
             except Exception as e:
-                logger.error(f"工作循环异常: {e}")
+                logger.error(f"Worker loop exception: {e}")
                 time.sleep(1)
     
     def _build_episode_payloads(
@@ -526,14 +526,14 @@ class ZepGraphMemoryUpdater:
                 self._total_sent += 1
                 self._total_items_sent += len(payload_activities)
                 display_name = self._get_platform_display_name(platform)
-                logger.info(f"成功批量发送 {len(payload_activities)} 条{display_name}活动到图谱 {self.graph_id}")
-                logger.debug(f"批量内容预览: {combined_text[:200]}...")
+                logger.info(f"Successfully sent batch of {len(payload_activities)} {display_name} activities to graph {self.graph_id}")
+                logger.debug(f"Batch preview: {combined_text[:200]}...")
 
             except Exception as e:
                 # graph.add has no idempotency key. Replaying an ambiguous
                 # response can duplicate extracted facts, so fail closed and
                 # surface the incomplete batch to SimulationRunner.
-                logger.error(f"批量发送到Zep失败，未自动重放非幂等写入: {e}")
+                logger.error(f"Batch send to Zep failed: {e}")
                 self._failed_count += 1
                 self._failed_batches.append({
                     "platform": platform,
@@ -577,7 +577,7 @@ class ZepGraphMemoryUpdater:
             if not buffer:
                 continue
             display_name = self._get_platform_display_name(platform)
-            logger.info(f"发送{display_name}平台剩余的 {len(buffer)} 条活动")
+            logger.info(f"Sending remaining {len(buffer)} activities for {display_name} platform")
             if deadline is not None and time.time() >= deadline:
                 raise TimeoutError(
                     "Zep updater drain deadline elapsed before flushing all activities"
@@ -675,7 +675,7 @@ class ZepGraphMemoryManager:
             cls._updaters[simulation_id] = updater
             cls._stop_all_done = False
             
-            logger.info(f"创建图谱记忆更新器: simulation_id={simulation_id}, graph_id={graph_id}")
+            logger.info(f"Created graph memory updater: simulation_id={simulation_id}, graph_id={graph_id}")
             return updater
     
     @classmethod
@@ -742,7 +742,7 @@ class ZepGraphMemoryManager:
         with cls._lock:
             if cls._updaters.get(simulation_id) is updater:
                 cls._updaters.pop(simulation_id, None)
-        logger.info(f"已停止图谱记忆更新器: simulation_id={simulation_id}")
+        logger.info(f"Stopped graph memory updater: simulation_id={simulation_id}")
     
     # 防止 stop_all 重复调用的标志
     _stop_all_done = False
@@ -780,7 +780,7 @@ class ZepGraphMemoryManager:
                 for simulation_id, error in errors
             )
             raise RuntimeError(f"部分图谱更新器未完整停止: {details}")
-        logger.info("已停止所有图谱记忆更新器")
+        logger.info("Stopped all graph memory updaters")
     
     @classmethod
     def get_all_stats(cls) -> Dict[str, Dict[str, Any]]:

@@ -4,7 +4,7 @@ import i18n from '../i18n'
 // 创建axios实例
 const service = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:5001',
-  timeout: 300000, // 5分钟超时（本体生成可能需要较长时间）
+  timeout: 900000, // 15分钟超时（适应本地模型或慢速LLM长任务）
   headers: {
     'Content-Type': 'application/json'
   }

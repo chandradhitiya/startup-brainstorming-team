@@ -6,10 +6,12 @@ LLM客户端封装
 import json
 import logging
 import re
+import importlib
 from typing import Optional, Dict, Any, List
 from openai import OpenAI
 
 from ..config import Config
+from . import openai_chat_compat
 from .openai_chat_compat import create_chat_completion, extract_chat_completion_text
 
 
@@ -66,9 +68,10 @@ def _is_response_format_unsupported(error: Exception) -> bool:
 
 def _clean_chat_text(content: str) -> str:
     """Remove common reasoning wrappers and an outer Markdown JSON fence."""
-
-    cleaned = re.sub(r'<think>[\s\S]*?</think>', '', content).strip()
-    cleaned = cleaned.lstrip("\ufeff")
+    cleaned = re.sub(r'<think>[\s\S]*?</think>', '', content, flags=re.IGNORECASE)
+    cleaned = re.sub(r'<thought>[\s\S]*?</thought>', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'<reasoning>[\s\S]*?</reasoning>', '', cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.lstrip("\ufeff").strip()
     cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'\n?```\s*$', '', cleaned)
     return cleaned.strip()
@@ -90,13 +93,14 @@ def _contains_additional_json_container(content: str) -> bool:
 
 class LLMClient:
     """LLM客户端"""
-    
+
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None
     ):
+        Config.reload()
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
         self.model = model or Config.LLM_MODEL_NAME
@@ -109,6 +113,21 @@ class LLMClient:
             base_url=self.base_url
         )
 
+    @classmethod
+    def create_boost(cls) -> Optional["LLMClient"]:
+        """Create a boost LLMClient from LLM_BOOST_* env vars if configured."""
+        import os
+        boost_api_key = os.environ.get("LLM_BOOST_API_KEY", "").strip()
+        if not boost_api_key:
+            return None
+        boost_base_url = os.environ.get("LLM_BOOST_BASE_URL", "").strip()
+        boost_model = os.environ.get("LLM_BOOST_MODEL_NAME", "").strip()
+        return cls(
+            api_key=boost_api_key,
+            base_url=boost_base_url or None,
+            model=boost_model or None
+        )
+
     def _create_completion(
         self,
         *,
@@ -118,8 +137,9 @@ class LLMClient:
         response_format: Optional[Dict[str, Any]],
     ) -> Any:
         """Send one raw Chat Completions request through the compatibility layer."""
-
-        return create_chat_completion(
+        importlib.reload(openai_chat_compat)
+        logger.info(f"LLM request: model={getattr(self, 'model', '')}, base_url={getattr(self, 'base_url', '')}")
+        return openai_chat_compat.create_chat_completion(
             self.client,
             model=self.model,
             messages=messages,
@@ -153,7 +173,7 @@ class LLMClient:
             max_tokens=max_tokens,
             response_format=response_format,
         )
-        content = extract_chat_completion_text(response)
+        content = openai_chat_compat.extract_chat_completion_text(response)
         return _clean_chat_text(content)
     
     def chat_json(
@@ -260,17 +280,28 @@ class LLMClient:
         try:
             value = json.loads(content)
         except json.JSONDecodeError as strict_error:
-            # Some compatible providers append a short explanation after an
-            # otherwise complete JSON object. Accept only an object decoded
-            # from the beginning; never repair or invent truncated JSON.
+            # Check raw_decode
             try:
                 value, end = json.JSONDecoder().raw_decode(content)
             except json.JSONDecodeError:
-                raise LLMResponseError(
-                    "LLM returned invalid JSON "
-                    f"(line {strict_error.lineno}, column {strict_error.colno})",
-                    finish_reason=finish_reason,
-                ) from strict_error
+                # If conversational text appeared before first '{', retry from first '{'
+                first_brace = content.find('{')
+                if first_brace > 0:
+                    try:
+                        value, end_rel = json.JSONDecoder().raw_decode(content[first_brace:])
+                        end = first_brace + end_rel
+                    except json.JSONDecodeError:
+                        raise LLMResponseError(
+                            "LLM returned invalid JSON "
+                            f"(line {strict_error.lineno}, column {strict_error.colno})",
+                            finish_reason=finish_reason,
+                        ) from strict_error
+                else:
+                    raise LLMResponseError(
+                        "LLM returned invalid JSON "
+                        f"(line {strict_error.lineno}, column {strict_error.colno})",
+                        finish_reason=finish_reason,
+                    ) from strict_error
 
             trailing = content[end:].strip()
             if trailing:

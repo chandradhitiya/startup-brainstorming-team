@@ -5,6 +5,7 @@
 
 import json
 import logging
+import os
 import re
 from typing import Dict, Any, List, Optional
 from ..utils.llm_client import LLMClient
@@ -232,13 +233,12 @@ class OntologyGenerator:
         ]
         
         # 调用LLM
+        max_tokens_env = os.environ.get('ONTOLOGY_MAX_COMPLETION_TOKENS')
+        max_tokens = int(max_tokens_env) if max_tokens_env else None
         result = self.llm_client.chat_json(
             messages=messages,
             temperature=0.3,
-            # Structured ontology responses can exceed 4096 completion tokens,
-            # especially when a compatible provider counts hidden reasoning in
-            # the same budget. Let the provider use its model-specific limit.
-            max_tokens=None,
+            max_tokens=max_tokens,
             max_attempts=2,
         )
         
@@ -247,12 +247,12 @@ class OntologyGenerator:
         
         return result
     
-    # 传给 LLM 的文本最大长度（5万字）
-    MAX_TEXT_LENGTH_FOR_LLM = 50000
-    LONG_TEXT_CHUNK_SIZE = 8000
-    LONG_TEXT_CHUNK_OVERLAP = 200
-    MAX_LONG_TEXT_CHUNKS = 60
-    MIN_LONG_TEXT_EXCERPT = 400
+    # 传给 LLM 的文本最大长度（适配免费 API 速率限制，默认 10,000 字符约 3,200 token）
+    MAX_TEXT_LENGTH_FOR_LLM = int(os.environ.get('ONTOLOGY_MAX_TEXT_LENGTH', 10000))
+    LONG_TEXT_CHUNK_SIZE = 3000
+    LONG_TEXT_CHUNK_OVERLAP = 150
+    MAX_LONG_TEXT_CHUNKS = 10
+    MIN_LONG_TEXT_EXCERPT = 200
     
     def _build_user_message(
         self,

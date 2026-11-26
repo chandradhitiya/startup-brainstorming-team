@@ -1300,12 +1300,12 @@ class ReportAgent:
         )
         system_prompt = f"{system_prompt}\n\n{get_language_instruction()}"
 
-        # 构建用户prompt - 每个已完成章节各传入最大4000字
+        # 构建用户prompt - 每个已完成章节各传入适当长度以防突破TPM和上下文限制
         if previous_sections:
             previous_parts = []
+            max_prev_chars = int(os.environ.get("REPORT_MAX_PREV_SECTION_CHARS", "1500"))
             for sec in previous_sections:
-                # 每个章节最多4000字
-                truncated = sec[:4000] + "..." if len(sec) > 4000 else sec
+                truncated = sec[:max_prev_chars] + "..." if len(sec) > max_prev_chars else sec
                 previous_parts.append(truncated)
             previous_content = "\n\n---\n\n".join(previous_parts)
         else:
@@ -1358,7 +1358,7 @@ class ReportAgent:
                 # 最后一次迭代也返回 None，跳出循环进入强制收尾
                 break
 
-            logger.debug(f"LLM响应: {response[:200]}...")
+            logger.debug(f"LLM response: {response[:200]}...")
 
             # 解析一次，复用结果
             tool_calls = self._parse_tool_calls(response)
@@ -1496,12 +1496,18 @@ class ReportAgent:
                     unused_hint = REACT_UNUSED_TOOLS_HINT.format(unused_list="、".join(unused_tools))
 
                 cleaned_response = ReportAgent._strip_fake_tool_results(response)
+                max_tool_chars = int(os.environ.get("REPORT_MAX_TOOL_RESULT_CHARS", "3000"))
+                prompt_result = (
+                    result[:max_tool_chars] + "\n...(truncated for context length)..."
+                    if len(result) > max_tool_chars
+                    else result
+                )
                 messages.append({"role": "assistant", "content": cleaned_response})
                 messages.append({
                     "role": "user",
                     "content": REACT_OBSERVATION_TEMPLATE.format(
                         tool_name=call["name"],
-                        result=result,
+                        result=prompt_result,
                         tool_calls_count=tool_calls_count,
                         max_tool_calls=self.MAX_TOOL_CALLS_PER_SECTION,
                         used_tools_str=", ".join(used_tools),
@@ -1512,6 +1518,8 @@ class ReportAgent:
 
             # ── 情况3：既没有工具调用，也没有 Final Answer ──
             cleaned_response = ReportAgent._strip_fake_tool_results(response)
+            if not cleaned_response.strip():
+                cleaned_response = "..."
             messages.append({"role": "assistant", "content": cleaned_response})
 
             if tool_calls_count < min_tool_calls:
@@ -1652,10 +1660,33 @@ class ReportAgent:
             if progress_callback:
                 progress_callback("planning", 0, t('progress.startPlanningOutline'))
             
-            outline = self.plan_outline(
-                progress_callback=lambda stage, prog, msg: 
-                    progress_callback(stage, prog // 5, msg) if progress_callback else None
-            )
+            # 阶段1: 规划大纲（如果已有大纲则复用，避免重复规划消耗tokens和时间）
+            outline = None
+            outline_path = ReportManager._get_outline_path(report_id)
+            if os.path.exists(outline_path):
+                try:
+                    with open(outline_path, 'r', encoding='utf-8') as f:
+                        outline_dict = json.load(f)
+                    if outline_dict.get('sections'):
+                        sections = [
+                            ReportSection(title=s['title'], content=s.get('content', ''))
+                            for s in outline_dict['sections']
+                        ]
+                        outline = ReportOutline(
+                            title=outline_dict.get('title', 'Simulation Analysis Report'),
+                            summary=outline_dict.get('summary', ''),
+                            sections=sections
+                        )
+                        logger.info(f"Reusing existing outline for {report_id} with {len(outline.sections)} sections")
+                except Exception as e:
+                    logger.warning(f"Could not load existing outline for {report_id}: {e}")
+                    outline = None
+
+            if not outline:
+                outline = self.plan_outline(
+                    progress_callback=lambda stage, prog, msg: 
+                        progress_callback(stage, prog // 5, msg) if progress_callback else None
+                )
             report.outline = outline
             
             # 记录规划完成日志
@@ -1676,67 +1707,101 @@ class ReportAgent:
             
             total_sections = len(outline.sections)
             generated_sections = []  # 保存内容用于上下文
-            
-            for i, section in enumerate(outline.sections):
-                section_num = i + 1
-                base_progress = 20 + int((i / total_sections) * 70)
-                
-                # 更新进度
-                ReportManager.update_progress(
-                    report_id, "generating", base_progress,
-                    t('progress.generatingSection', title=section.title, current=section_num, total=total_sections),
-                    current_section=section.title,
-                    completed_sections=completed_section_titles
-                )
+            parallel_sections = os.environ.get("REPORT_PARALLEL_SECTIONS", "false").lower() == "true"
 
-                if progress_callback:
-                    progress_callback(
-                        "generating",
-                        base_progress,
-                        t('progress.generatingSection', title=section.title, current=section_num, total=total_sections)
+            if parallel_sections and total_sections > 1:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                max_workers = min(total_sections, int(os.environ.get("REPORT_PARALLEL_WORKERS", "3")))
+                logger.info(f"Generating {total_sections} sections in parallel, worker count: {max_workers}")
+
+                def _gen_worker(idx_sec):
+                    idx, sec = idx_sec
+                    sec_num = idx + 1
+                    sec_content = self._generate_section_react(
+                        section=sec,
+                        outline=outline,
+                        previous_sections=[],
+                        section_index=sec_num
                     )
-                
-                # 生成主章节内容
-                section_content = self._generate_section_react(
-                    section=section,
-                    outline=outline,
-                    previous_sections=generated_sections,
-                    progress_callback=lambda stage, prog, msg:
+                    sec.content = sec_content
+                    ReportManager.save_section(report_id, sec_num, sec)
+                    return idx, sec_num, sec, sec_content
+
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = [executor.submit(_gen_worker, (i, sec)) for i, sec in enumerate(outline.sections)]
+                    for future in as_completed(futures):
+                        idx, sec_num, sec, sec_content = future.result()
+                        completed_section_titles.append(sec.title)
+                        ReportManager.update_progress(
+                            report_id, "generating", 
+                            20 + int((len(completed_section_titles) / total_sections) * 70),
+                            t('progress.sectionDone', title=sec.title),
+                            completed_sections=completed_section_titles
+                        )
+
+                for sec in outline.sections:
+                    generated_sections.append(f"## {sec.title}\n\n{sec.content}")
+            else:
+                for i, section in enumerate(outline.sections):
+                    section_num = i + 1
+                    base_progress = 20 + int((i / total_sections) * 70)
+                    
+                    # 更新进度
+                    ReportManager.update_progress(
+                        report_id, "generating", base_progress,
+                        t('progress.generatingSection', title=section.title, current=section_num, total=total_sections),
+                        current_section=section.title,
+                        completed_sections=completed_section_titles
+                    )
+
+                    if progress_callback:
                         progress_callback(
-                            stage, 
-                            base_progress + int(prog * 0.7 / total_sections),
-                            msg
-                        ) if progress_callback else None,
-                    section_index=section_num
-                )
-                
-                section.content = section_content
-                generated_sections.append(f"## {section.title}\n\n{section_content}")
-
-                # 保存章节
-                ReportManager.save_section(report_id, section_num, section)
-                completed_section_titles.append(section.title)
-
-                # 记录章节完成日志
-                full_section_content = f"## {section.title}\n\n{section_content}"
-
-                if self.report_logger:
-                    self.report_logger.log_section_full_complete(
-                        section_title=section.title,
-                        section_index=section_num,
-                        full_content=full_section_content.strip()
+                            "generating",
+                            base_progress,
+                            t('progress.generatingSection', title=section.title, current=section_num, total=total_sections)
+                        )
+                    
+                    # 生成主章节内容
+                    section_content = self._generate_section_react(
+                        section=section,
+                        outline=outline,
+                        previous_sections=generated_sections,
+                        progress_callback=lambda stage, prog, msg:
+                            progress_callback(
+                                stage, 
+                                base_progress + int(prog * 0.7 / total_sections),
+                                msg
+                            ) if progress_callback else None,
+                        section_index=section_num
                     )
+                    
+                    section.content = section_content
+                    generated_sections.append(f"## {section.title}\n\n{section_content}")
 
-                logger.info(t('report.sectionSaved', reportId=report_id, sectionNum=f"{section_num:02d}"))
-                
-                # 更新进度
-                ReportManager.update_progress(
-                    report_id, "generating", 
-                    base_progress + int(70 / total_sections),
-                    t('progress.sectionDone', title=section.title),
-                    current_section=None,
-                    completed_sections=completed_section_titles
-                )
+                    # 保存章节
+                    ReportManager.save_section(report_id, section_num, section)
+                    completed_section_titles.append(section.title)
+
+                    # 记录章节完成日志
+                    full_section_content = f"## {section.title}\n\n{section_content}"
+
+                    if self.report_logger:
+                        self.report_logger.log_section_full_complete(
+                            section_title=section.title,
+                            section_index=section_num,
+                            full_content=full_section_content.strip()
+                        )
+
+                    logger.info(t('report.sectionSaved', reportId=report_id, sectionNum=f"{section_num:02d}"))
+                    
+                    # 更新进度
+                    ReportManager.update_progress(
+                        report_id, "generating", 
+                        base_progress + int(70 / total_sections),
+                        t('progress.sectionDone', title=section.title),
+                        current_section=None,
+                        completed_sections=completed_section_titles
+                    )
             
             # 阶段3: 组装完整报告
             if progress_callback:
@@ -1903,6 +1968,8 @@ class ReportAgent:
             
             # 将结果添加到消息
             cleaned_response = ReportAgent._strip_fake_tool_results(response)
+            if not cleaned_response.strip():
+                cleaned_response = "..."
             messages.append({"role": "assistant", "content": cleaned_response})
             observation = "\n".join([f"[{r['tool']}结果]\n{r['result']}" for r in tool_results])
             messages.append({

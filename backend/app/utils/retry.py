@@ -52,7 +52,7 @@ def retry_with_backoff(
                     last_exception = e
                     
                     if attempt == max_retries:
-                        logger.error(f"函数 {func.__name__} 在 {max_retries} 次重试后仍失败: {str(e)}")
+                        logger.error(f"Function {func.__name__} failed after {max_retries} retries: {str(e)}")
                         raise
                     
                     # 计算延迟
@@ -105,7 +105,7 @@ def retry_with_backoff_async(
                     last_exception = e
                     
                     if attempt == max_retries:
-                        logger.error(f"异步函数 {func.__name__} 在 {max_retries} 次重试后仍失败: {str(e)}")
+                        logger.error(f"Async function {func.__name__} failed after {max_retries} retries: {str(e)}")
                         raise
                     
                     current_delay = min(delay, max_delay)
@@ -176,7 +176,7 @@ class RetryableAPIClient:
                 last_exception = e
                 
                 if attempt == self.max_retries:
-                    logger.error(f"API调用在 {self.max_retries} 次重试后仍失败: {str(e)}")
+                    logger.error(f"API call failed after {self.max_retries} retries: {str(e)}")
                     raise
                 
                 current_delay = min(delay, self.max_delay)
@@ -224,7 +224,7 @@ class RetryableAPIClient:
                 results.append(result)
                 
             except Exception as e:
-                logger.error(f"处理第 {idx + 1} 项失败: {str(e)}")
+                logger.error(f"Failed to process item {idx + 1}: {str(e)}")
                 failures.append({
                     "index": idx,
                     "item": item,
